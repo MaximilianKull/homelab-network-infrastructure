@@ -1,207 +1,167 @@
-# homelab-network-infrastructure
-Self-hosted Linux network environment using Docker, Pi-hole and WireGuard
-# Self-Hosted Network Infrastructure & Homelab
+# Homelab Network Infrastructure
 
-A self-hosted Linux environment built to gain hands-on experience with Linux system administration, networking, containerization, DNS, secure remote access, monitoring and automation.
+Hands-on Linux infrastructure project documenting a hardened Ubuntu VPS used for secure remote access and private DNS services.
 
-The environment runs several network and monitoring services using Docker and is maintained as an ongoing personal infrastructure project.
+The goal of this repository is to show the architecture, implementation decisions, verification process, and troubleshooting behind a real self-hosted environment rather than only presenting installation commands.
 
-> **Security note:** All examples and documentation in this repository are sanitized. No production credentials, private keys, public IP addresses, personal domains or other sensitive configuration data are included.
+> **Security:** All configuration examples are sanitized. Private keys, credentials, public IP addresses, personal domains, production hostnames, and provider/account data are intentionally excluded.
 
----
+## Current verified deployment
+
+- Ubuntu 24.04 LTS VPS
+- SSH public-key authentication with password authentication disabled
+- UFW host firewall with default-deny inbound policy
+- WireGuard remote-access VPN on `10.66.66.0/24`
+- IPv4 forwarding for VPN client routing
+- Docker + Docker Compose
+- Containerized AdGuard Home
+- DNS exposed specifically on the WireGuard-side address
+- AdGuard management interface bound to localhost
+- BBR congestion control with `fq` queueing
+- Remote VPN client verified for tunnel connectivity, Internet routing, and DNS resolution
 
 ## Architecture
 
-The environment consists of a Linux-based host running containerized network and monitoring services.
+```text
+Remote client
+     |
+     | WireGuard UDP
+     v
++--------------------------------------+
+| Ubuntu 24.04 VPS                     |
+|                                      |
+|  SSH administration                  |
+|  - public-key authentication         |
+|  - password authentication disabled |
+|                                      |
+|  UFW                                 |
+|  - default deny incoming             |
+|  - SSH + WireGuard explicitly open  |
+|                                      |
+|  WireGuard                           |
+|  - VPN network: 10.66.66.0/24        |
+|  - server: 10.66.66.1                |
+|       |                              |
+|       +----> Docker                  |
+|              |                       |
+|              +--> AdGuard Home       |
+|                   DNS :53 TCP/UDP    |
+|                                      |
+|  AdGuard UI -> localhost only        |
++------------------+-------------------+
+                   |
+                   v
+              Upstream DNS
+```
 
-A visual overview of the infrastructure can be found in the `diagrams` directory.
+A broader homelab diagram is available in [`diagrams/`](diagrams/).
 
----
+## Security model
 
-## Technologies
+The deployment follows a small-exposure approach:
 
-### Operating System & Infrastructure
+1. Administrative SSH access uses public-key authentication; password and keyboard-interactive authentication are disabled.
+2. UFW denies unsolicited inbound traffic by default.
+3. Only the required SSH and WireGuard entry points are explicitly allowed through the host firewall.
+4. AdGuard DNS is published on the WireGuard-side address rather than intentionally operating as a public DNS resolver.
+5. The AdGuard management interface is mapped to localhost rather than a public interface.
+6. No private key or production credential is stored in this repository.
 
-- Linux
-- Docker
-- Docker Compose
-- TCP/IP
-- Network routing
-- SSH
-- Persistent Docker volumes
+See [`docs/server-hardening.md`](docs/server-hardening.md) for the verified hardening baseline.
 
-### DNS
+## WireGuard and DNS
 
-- Pi-hole
-- AdGuard Home
-- DNS configuration
-- DNS filtering
-- DNS troubleshooting
-- Upstream DNS resolvers
+The WireGuard server uses the private VPN network `10.66.66.0/24`, with the server observed at `10.66.66.1`. A remote client was tested successfully for:
 
-### Remote Access
+- tunnel connectivity
+- access to the VPN-side DNS service
+- Internet routing through the VPN
+- DNS resolution over both TCP and UDP during troubleshooting
 
-- WireGuard
-- Encrypted VPN tunnels
-- Secure remote access
-- Network routing
+AdGuard Home runs in Docker. Its DNS listener is published on the VPN-side address on port 53 TCP/UDP, while the management UI is mapped to `127.0.0.1:3000` on the host.
 
-### Monitoring & Automation
+This separation is intentional: VPN clients need DNS, but the administration interface does not need to be publicly exposed.
 
-- Linux system monitoring
-- Network connectivity monitoring
-- DNS health checks
-- Service availability checks
-- Automated notifications
-- Telegram Bot integration
+See [`docs/wireguard-and-routing.md`](docs/wireguard-and-routing.md) and [`docs/adguard-home.md`](docs/adguard-home.md).
 
----
+## Troubleshooting case study
 
-## DNS Infrastructure
+One of the useful parts of this project was diagnosing a DNS-over-WireGuard failure instead of treating the deployment as a black box.
 
-DNS services are hosted locally to provide centralized DNS resolution and filtering for devices on the network.
+The investigation separated the path into layers:
 
-Pi-hole and AdGuard Home are used to manage and experiment with:
+```text
+remote client
+   -> WireGuard tunnel
+   -> host listener
+   -> Docker port publishing
+   -> AdGuard container
+   -> upstream DNS
+```
 
-- Network-wide DNS filtering
-- DNS query handling
-- Custom DNS configuration
-- Upstream DNS resolvers
-- DNS troubleshooting
-- Service availability
+Tools used included `dig`, `nslookup`, `ss`, Docker status/log commands, `ping`, and `traceroute`.
 
-Running DNS services locally has provided practical experience with DNS resolution and troubleshooting network-wide DNS issues.
+Container-local DNS worked while the original remote query timed out. Testing then confirmed Docker's port listener, DNS over TCP, and finally successful remote UDP DNS resolution with `NOERROR`.
 
----
+A second issue involved the AdGuard web interface: the first-launch interface used its setup port, while the configured web service subsequently listened on container port 80. The host-to-container mapping was corrected accordingly.
 
-## Containerization
+See [`docs/troubleshooting/dns-over-wireguard.md`](docs/troubleshooting/dns-over-wireguard.md).
 
-Network services are deployed and managed using Docker.
+## Network diagnostics and tuning
 
-Containerization keeps individual services isolated while simplifying deployment, maintenance and upgrades.
+The VPS was also used for practical network diagnostics:
 
-Areas covered include:
+- BBR + `fq` configured and verified
+- latency and packet-loss testing
+- multiple ICMP payload sizes
+- DF/MTU testing with a 1372-byte payload
+- traceroute investigation
+- IPv6 capability inspection
 
-- Container deployment and management
-- Docker networking
-- Persistent volumes
-- Container configuration
-- Service updates
-- Container troubleshooting
-- Docker Compose
+No clear MTU/fragmentation failure was demonstrated. VPS-side testing to a public resolver was stable during the recorded test, while the remote access network showed greater latency/jitter and intermittent ICMP loss. This is documented as a troubleshooting observation, not a permanent performance benchmark.
 
-Example configurations published in this repository contain placeholder values and do not contain sensitive data from the live environment.
+See [`docs/network-diagnostics.md`](docs/network-diagnostics.md).
 
----
+## Repository structure
 
-## WireGuard Remote Access
+```text
+.
+├── README.md
+├── diagrams/
+├── docker/
+│   └── adguard-home/
+│       └── compose.example.yml
+├── docs/
+│   ├── server-hardening.md
+│   ├── wireguard-and-routing.md
+│   ├── adguard-home.md
+│   ├── network-diagnostics.md
+│   ├── verification.md
+│   └── troubleshooting/
+│       └── dns-over-wireguard.md
+└── wireguard/
+    └── README.md
+```
 
-WireGuard provides encrypted remote access to resources within the home network.
+## Skills demonstrated
 
-The implementation provided practical experience with:
-
-- VPN configuration
-- Public/private key authentication
-- IP addressing
-- Network routing
-- Peer configuration
-- Firewall configuration
-- VPN connectivity troubleshooting
-
-Private keys and production configuration files are never stored in this repository.
-
----
-
-## Monitoring
-
-The environment includes monitoring for both the Linux host and important network services.
-
-Monitored information includes:
-
-- System uptime
-- CPU and memory usage
-- Disk usage
-- System temperature
-- Internet connectivity
-- DNS availability
-- Service status
-
-This makes it possible to identify system, service or connectivity problems without manually checking each component.
-
----
-
-## Automated Notifications
-
-Monitoring events can trigger automated notifications through a Telegram bot.
-
-This allows important system and network events to be reported automatically.
-
-The public example implementation contains placeholder credentials only. Real bot tokens, chat IDs and other credentials are not included.
-
----
-
-## Dynamic DNS
-
-Dynamic DNS is used to maintain remote connectivity when the public IP address changes.
-
-Only the general implementation is documented in this repository. The actual hostname and production configuration are intentionally not published.
-
----
-
-## Security
-
-Security was considered throughout the design and maintenance of the environment.
-
-This public repository therefore contains only sanitized documentation and example configurations.
-
-The following information is intentionally not published:
-
-- Private keys
-- Passwords
-- API tokens
-- Bot tokens
-- Public IP addresses
-- Personal domains
-- Internal hostnames
-- Production configuration files
-- Logs containing identifying information
-
----
-
-## Repository Structure
-
-The repository is organized into separate sections for documentation and sanitized example configurations:
-
-- `diagrams/` — Infrastructure and network architecture diagrams
-- `docker/` — Sanitized Docker and Docker Compose examples
-- `wireguard/` — Sanitized WireGuard configuration examples
-- `monitoring/` — Monitoring and notification examples
-
----
-
-## What I Learned
-
-Building and maintaining this environment has provided hands-on experience beyond theoretical networking concepts.
-
-Key areas include:
-
-- Linux system administration
-- Docker and containerization
-- Computer networking
+- Linux server administration
+- SSH hardening and public-key authentication
+- Host firewall configuration
+- WireGuard VPN deployment
+- IPv4 routing and forwarding
 - DNS infrastructure
-- VPN configuration
-- Network routing
+- Docker and Docker Compose
+- Service exposure and port-binding design
 - Network troubleshooting
-- System and service monitoring
-- Automation
-- Maintaining self-hosted services
+- MTU, latency, and packet-loss diagnostics
+- Operational verification
+- Security-conscious technical documentation
 
-The environment continues to evolve as I experiment with new technologies and improve the reliability and maintainability of the infrastructure.
+## Scope
 
----
+This repository intentionally documents conventional defensive infrastructure: Linux administration, secure remote access, DNS, containers, routing, monitoring, and troubleshooting. It does not publish unrelated sensitive infrastructure or credentials.
 
-## Disclaimer
+## Status
 
-This repository documents a personal homelab and learning environment.
-
-Configuration files are provided as sanitized examples for documentation and educational purposes and do not represent the complete production configuration.
+This is an evolving lab. Documentation distinguishes verified implementation from future work; planned features are not presented as completed.
