@@ -1,103 +1,71 @@
-# Incident: DNS Resolution over WireGuard
+# DNS over WireGuard: Troubleshooting Notes
 
-## Symptom
+## Problem
 
-A remote client initially timed out when querying the VPN-side DNS service.
-
-Sanitized test form:
+A remote client could connect to WireGuard, but DNS queries to the VPN-side DNS service timed out.
 
 ```bash
 dig @VPN_DNS google.com
 ```
 
-The goal was to determine whether the problem was the VPN, the host listener, Docker publishing, AdGuard itself, or upstream DNS.
+I wanted to figure out whether the problem was the tunnel, the Linux host, Docker, AdGuard or the upstream resolver.
 
-## Diagnostic strategy
-
-Instead of changing multiple components at once, the path was tested layer by layer:
+## What I checked
 
 ```text
-remote client
-    |
-WireGuard tunnel
-    |
-host :53 listener
-    |
-Docker port publishing
-    |
-AdGuard container
-    |
-upstream DNS
+client
+  -> WireGuard
+  -> host :53 listener
+  -> Docker port publishing
+  -> AdGuard container
+  -> upstream DNS
 ```
 
-## 1. Inspect listeners
+### 1. Is anything listening on port 53?
 
 ```bash
 ss -lntup | grep ':53 '
 ```
 
-This checks which process is listening, on which address, and for which transport.
-
-## 2. Check container state
+### 2. Is the container actually running?
 
 ```bash
 docker compose ps
 docker logs adguardhome --tail 30
 ```
 
-This distinguishes a dead/unhealthy container from a network publication problem.
-
-## 3. Test DNS inside the container
+### 3. Does DNS work inside the container?
 
 ```bash
 docker exec adguardhome nslookup google.com 127.0.0.1
 ```
 
-Container-local DNS succeeded. That was important evidence: the DNS application itself could resolve queries, so the investigation could move outward toward Docker/host/client connectivity.
+It did. That ruled out a basic AdGuard/upstream failure and pushed the problem further out toward Docker publishing or the client path.
 
-## 4. Test host-side behavior
+### 4. Is Docker publishing the right socket?
 
-A host-local `dig` test was used as another boundary check. The final deployment intentionally did not publish AdGuard DNS on host localhost; it was bound to the VPN-side address instead.
+I confirmed Docker was listening on the WireGuard-side host address on port 53 for both TCP and UDP.
 
-This matters because `localhost:53` and `VPN_ADDRESS:53` are different sockets and should not be treated as interchangeable tests.
+The deployment does **not** publish AdGuard DNS on host localhost, so `127.0.0.1:53` and `VPN_ADDRESS:53` are not equivalent tests.
 
-## 5. Verify Docker publishing
-
-Docker's proxy was confirmed listening on the VPN-side address on port 53 for both TCP and UDP.
-
-That demonstrated that the container port was being published where the VPN design expected it.
-
-## 6. Compare TCP and UDP DNS
-
-A remote TCP query was tested:
+### 5. Does TCP DNS work?
 
 ```bash
 dig @VPN_DNS google.com +tcp
 ```
 
-DNS over VPN TCP worked. Remote UDP DNS was then retested and ultimately returned a successful `NOERROR` response.
+TCP worked over the VPN. I then retested normal UDP DNS remotely, which returned `NOERROR`.
 
 ## Result
 
-The final verified state was:
+At the end of the checks:
 
-- AdGuard resolved DNS from inside its container
-- Docker published port 53 TCP/UDP on the VPN-side host address
-- DNS over WireGuard worked with TCP
-- DNS over WireGuard worked with UDP
-- remote client resolution succeeded
+- DNS worked inside the AdGuard container
+- Docker published port 53 TCP/UDP on the VPN address
+- DNS over WireGuard worked over TCP
+- DNS over WireGuard worked over UDP
+- the remote client resolved DNS successfully
 
-## What this incident demonstrated
+## Takeaway
 
-The useful part of the incident was not a single command. It was narrowing the fault domain without assuming that "DNS is broken" identified the failing component.
-
-The troubleshooting model separated:
-
-1. client/access network
-2. VPN tunnel
-3. Linux host
-4. Docker publishing
-5. application/container
-6. upstream Internet service
-
-That same approach is reusable for other containerized network services.
+The useful part for me was narrowing the failure down one layer at a time instead of treating "DNS is broken" as one problem. The same pattern applies to most containerized network services: prove the application locally first, then move outward through container networking, host networking, firewall/routing and finally the client.
