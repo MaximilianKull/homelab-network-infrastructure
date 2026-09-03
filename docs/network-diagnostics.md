@@ -1,53 +1,37 @@
 # Network Diagnostics and Tuning
 
-## TCP congestion control
+## BBR and queueing
 
-The VPS was verified using:
+The VPS is using:
 
 ```text
 net.ipv4.tcp_congestion_control = bbr
 net.core.default_qdisc = fq
 ```
 
-These values were checked with `sysctl` after configuration.
+I checked both values with `sysctl` after configuring them.
 
-## Latency and packet-loss investigation
+## Latency and packet loss
 
-Network testing included `ping` and `traceroute` from different points in the path.
+I used `ping` and `traceroute` from different points in the path to separate VPS-side behavior from the remote client's access network.
 
-A recorded VPS-side test to a public resolver was normally around 25 ms. A DF test using a 1372-byte ICMP payload returned 20/20 packets with no loss and approximately 29 ms average latency during that sample.
+One VPS-side sample to a public resolver was around 25 ms. A 1372-byte DF test returned 20/20 packets with no loss and about 29 ms average latency for that run.
 
-These are troubleshooting observations, not advertised benchmarks. Network conditions vary by route, access network, time, and destination.
+I treat those numbers as troubleshooting samples, not performance benchmarks.
 
-## MTU / fragmentation test
-
-Linux testing included:
+## MTU test
 
 ```bash
 ping -s 1372 -M do TARGET
 ```
 
-`-M do` requests that packets not be fragmented. This is useful when investigating whether a path MTU problem may be contributing to connectivity issues.
+I also tested smaller payloads (56 and 1000 bytes). I did not reproduce a clear MTU/fragmentation failure.
 
-Payload sizes tested during the investigation included:
+The remote client path showed more latency/jitter and intermittent ICMP loss than the VPS-side path, which made the access network a more likely source of the instability I was seeing at that time.
 
-- 56 bytes
-- 1000 bytes
-- 1372 bytes
+## IPv6
 
-No clear MTU/fragmentation failure was demonstrated in the recorded testing.
-
-## Client vs server path
-
-The remote client's access network showed substantially higher latency/jitter and intermittent ICMP loss compared with the VPS-side test.
-
-The evidence therefore suggested instability somewhere on the client/access path rather than demonstrating a basic VPS or WireGuard failure. This conclusion is intentionally cautious because the measurements were point-in-time diagnostics rather than controlled long-duration benchmarks.
-
-## IPv6 capability
-
-IPv6 interface and route state were inspected. No usable global IPv6 address/default route was demonstrated in the verified output.
-
-The infrastructure is therefore documented as IPv4-based unless global IPv6 is later configured and independently verified.
+I checked the IPv6 addresses and routes on the VPS. There was no usable global IPv6 address or default IPv6 route in the captured output, so I currently treat the deployment as IPv4-only.
 
 ## Tools used
 
@@ -57,6 +41,6 @@ The infrastructure is therefore documented as IPv4-based unless global IPv6 is l
 - `nslookup`
 - `ss`
 - `sysctl`
-- Docker logs and status commands
+- Docker status/log commands
 
-The broader lesson was to measure each layer independently before changing configuration.
+The main habit I took from this troubleshooting was to test each layer separately before changing configuration.
