@@ -1,0 +1,19 @@
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    restart: unless-stopped
+
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf
+
+    # DNS is deliberately published on the WireGuard-side host address.
+    # The management UI is deliberately restricted to localhost.
+    ports:
+      - "${VPN_ADDRESS:-10.66.66.1}:53:53/tcp"
+      - "${VPN_ADDRESS:-10.66.66.1}:53:53/udp"
+      - "127.0.0.1:3000:80/tcp"
+
+# Sanitized portfolio example derived from the verified deployment.
+# Do not commit production credentials, public addresses, domains, or secrets.
