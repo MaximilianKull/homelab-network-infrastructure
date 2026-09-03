@@ -1,10 +1,8 @@
 # WireGuard and Routing
 
-## Purpose
+WireGuard gives me remote access to the VPS and a private path to the DNS service.
 
-WireGuard provides legitimate encrypted remote access to the VPS environment and a private path to the DNS service.
-
-## Verified addressing
+## Addressing
 
 ```text
 VPN network: 10.66.66.0/24
@@ -12,57 +10,55 @@ VPN server:  10.66.66.1
 Listen port: 51820/UDP
 ```
 
-Two peer sections were present in the sanitized server configuration at the time of inspection. Their keys and identifying endpoint information are intentionally not reproduced.
+The server config currently has two peer sections. I do not publish real peer keys or endpoint details.
 
 ## Traffic flow
 
 ```text
 remote client
     |
-    | encrypted WireGuard tunnel
+    | WireGuard tunnel
     v
 10.66.66.1 (VPS)
     |
-    +--> AdGuard DNS on VPN-side :53
+    +--> AdGuard DNS on :53
     |
     +--> IPv4 forwarding -> Internet
 ```
 
-IPv4 forwarding was verified as enabled on the server.
+`net.ipv4.ip_forward` is enabled so VPN clients can route through the VPS.
 
-## Firewall relationship
+## Firewall
 
-The host firewall explicitly allows the WireGuard UDP entry point. Routed traffic from the WireGuard interface toward the external VPS interface was also present in the verified firewall state.
+UFW allows the WireGuard UDP port and forwarding from the WireGuard interface toward the external network interface.
 
-This is a useful distinction: establishing the encrypted tunnel and successfully routing client traffic are separate layers that both need verification.
+A working tunnel and working routed traffic are two different checks. I tested both instead of assuming that a successful handshake meant everything behind the tunnel was reachable.
 
-## Client verification
+## Client tests
 
-A remote macOS client was used to verify:
+From a remote macOS client I confirmed:
 
-- WireGuard connectivity
-- reachability of the VPN-side DNS service
-- Internet routing through the tunnel
-- DNS resolution over the tunnel
+- the tunnel connects
+- the VPN-side DNS service is reachable
+- Internet traffic can be routed through the VPS
+- DNS works over the tunnel
 
-DNS troubleshooting additionally verified both TCP and UDP behavior.
+During the DNS issue I also tested both TCP and UDP separately.
 
-## Configuration safety
+## Config handling
 
-A production WireGuard configuration is deliberately not committed because it contains cryptographic identity material.
+I do not commit the production WireGuard config because it contains key material and peer details. New systems should generate their own keys locally and keep private keys out of source control.
 
-The public repository documents structure and behavior rather than distributing real peer configurations. When reproducing the environment, generate new keys on the systems that will use them and keep private material outside source control.
+## How I troubleshoot it
 
-## Troubleshooting model
+If something over WireGuard is broken, I check the path in order:
 
-When a client cannot use a service over WireGuard, test the layers separately:
+1. interface up?
+2. UDP listener present?
+3. VPN-side host reachable?
+4. IP forwarding enabled?
+5. firewall path allowed?
+6. application listening on the right interface?
+7. application working locally?
 
-1. Is the WireGuard interface active?
-2. Is the expected UDP listener present?
-3. Can the client reach the VPN-side host address?
-4. Is IP forwarding configured when routing is required?
-5. Does the firewall permit the intended path?
-6. Is the application listening on the correct host/interface?
-7. Does the application work locally before testing remotely?
-
-This layer-by-layer method was used during the DNS incident documented in [`troubleshooting/dns-over-wireguard.md`](troubleshooting/dns-over-wireguard.md).
+That same approach is what I used in the DNS incident: [`troubleshooting/dns-over-wireguard.md`](troubleshooting/dns-over-wireguard.md)
