@@ -1,24 +1,24 @@
 # Homelab Network Infrastructure
 
-Hands-on Linux infrastructure project documenting a hardened Ubuntu VPS used for secure remote access and private DNS services.
+This repository documents a Linux networking lab I built around an Ubuntu 24.04 VPS.
 
-The goal of this repository is to show the architecture, implementation decisions, verification process, and troubleshooting behind a real self-hosted environment rather than only presenting installation commands.
+The current setup uses WireGuard for remote access and runs AdGuard Home in Docker for DNS filtering. Most of the interesting work was not the installation itself, but getting routing, service exposure, firewall rules and DNS through Docker/WireGuard working cleanly.
 
-> **Security:** All configuration examples are sanitized. Private keys, credentials, public IP addresses, personal domains, production hostnames, and provider/account data are intentionally excluded.
+> Public examples are sanitized. No real private keys, credentials, public IP addresses, personal domains, production hostnames or provider data are stored here.
 
-## Current verified deployment
+## Current setup
 
 - Ubuntu 24.04 LTS VPS
-- SSH public-key authentication with password authentication disabled
-- UFW host firewall with default-deny inbound policy
-- WireGuard remote-access VPN on `10.66.66.0/24`
-- IPv4 forwarding for VPN client routing
+- SSH with public-key authentication
+- password and keyboard-interactive SSH authentication disabled
+- UFW with default-deny incoming policy
+- WireGuard on `10.66.66.0/24`
+- IPv4 forwarding for VPN traffic
 - Docker + Docker Compose
-- Containerized AdGuard Home
-- DNS exposed specifically on the WireGuard-side address
-- AdGuard management interface bound to localhost
-- BBR congestion control with `fq` queueing
-- Remote VPN client verified for tunnel connectivity, Internet routing, and DNS resolution
+- AdGuard Home in Docker
+- DNS published on the WireGuard-side address only
+- AdGuard web UI bound to localhost
+- BBR with `fq`
 
 ## Architecture
 
@@ -30,17 +30,9 @@ Remote client
 +--------------------------------------+
 | Ubuntu 24.04 VPS                     |
 |                                      |
-|  SSH administration                  |
-|  - public-key authentication         |
-|  - password authentication disabled |
-|                                      |
+|  SSH                                 |
 |  UFW                                 |
-|  - default deny incoming             |
-|  - SSH + WireGuard explicitly open  |
-|                                      |
-|  WireGuard                           |
-|  - VPN network: 10.66.66.0/24        |
-|  - server: 10.66.66.1                |
+|  WireGuard 10.66.66.1/24             |
 |       |                              |
 |       +----> Docker                  |
 |              |                       |
@@ -54,114 +46,87 @@ Remote client
               Upstream DNS
 ```
 
-A broader homelab diagram is available in [`diagrams/`](diagrams/).
+A broader homelab diagram is in [`diagrams/`](diagrams/).
 
-## Security model
+## Hardening choices
 
-The deployment follows a small-exposure approach:
+I kept externally reachable services to the minimum I needed for this setup: SSH and WireGuard.
 
-1. Administrative SSH access uses public-key authentication; password and keyboard-interactive authentication are disabled.
-2. UFW denies unsolicited inbound traffic by default.
-3. Only the required SSH and WireGuard entry points are explicitly allowed through the host firewall.
-4. AdGuard DNS is published on the WireGuard-side address rather than intentionally operating as a public DNS resolver.
-5. The AdGuard management interface is mapped to localhost rather than a public interface.
-6. No private key or production credential is stored in this repository.
+For SSH, root login is disabled and authentication is done with public keys instead of passwords. UFW denies unsolicited inbound traffic by default and only allows the services I need.
 
-See [`docs/server-hardening.md`](docs/server-hardening.md) for the verified hardening baseline.
+For AdGuard, I did not want to expose either a public DNS resolver or the management UI. DNS is bound to the WireGuard address, while the web UI is mapped to `127.0.0.1:3000`.
+
+More details: [`docs/server-hardening.md`](docs/server-hardening.md)
 
 ## WireGuard and DNS
 
-The WireGuard server uses the private VPN network `10.66.66.0/24`, with the server observed at `10.66.66.1`. A remote client was tested successfully for:
+The VPN network is `10.66.66.0/24`, with the server on `10.66.66.1`.
 
-- tunnel connectivity
-- access to the VPN-side DNS service
-- Internet routing through the VPN
-- DNS resolution over both TCP and UDP during troubleshooting
+I tested the setup from a remote macOS client and confirmed:
 
-AdGuard Home runs in Docker. Its DNS listener is published on the VPN-side address on port 53 TCP/UDP, while the management UI is mapped to `127.0.0.1:3000` on the host.
+- the WireGuard tunnel comes up
+- the client can use the VPN-side DNS service
+- Internet traffic can be routed through the VPS
+- DNS works over the tunnel
 
-This separation is intentional: VPN clients need DNS, but the administration interface does not need to be publicly exposed.
+AdGuard Home runs in Docker and listens on port 53 TCP/UDP through the WireGuard-side host address. The web interface stays local to the VPS.
 
-See [`docs/wireguard-and-routing.md`](docs/wireguard-and-routing.md) and [`docs/adguard-home.md`](docs/adguard-home.md).
+Details: [`docs/wireguard-and-routing.md`](docs/wireguard-and-routing.md) and [`docs/adguard-home.md`](docs/adguard-home.md)
 
-## Troubleshooting case study
+## Something that broke: DNS over WireGuard
 
-One of the useful parts of this project was diagnosing a DNS-over-WireGuard failure instead of treating the deployment as a black box.
+At one point the remote client timed out on DNS even though the tunnel itself was up.
 
-The investigation separated the path into layers:
+Instead of changing everything at once, I worked through the path one layer at a time:
 
 ```text
-remote client
-   -> WireGuard tunnel
-   -> host listener
-   -> Docker port publishing
-   -> AdGuard container
-   -> upstream DNS
+client
+  -> WireGuard
+  -> Linux host listener
+  -> Docker port publishing
+  -> AdGuard container
+  -> upstream DNS
 ```
 
-Tools used included `dig`, `nslookup`, `ss`, Docker status/log commands, `ping`, and `traceroute`.
+I used `dig`, `nslookup`, `ss`, `docker compose ps`, Docker logs, `ping` and `traceroute` while narrowing it down.
 
-Container-local DNS worked while the original remote query timed out. Testing then confirmed Docker's port listener, DNS over TCP, and finally successful remote UDP DNS resolution with `NOERROR`.
+The important clue was that DNS worked inside the container. From there I checked the host listener and Docker publishing, tested DNS over TCP, and then retested remote UDP DNS until it returned `NOERROR`.
 
-A second issue involved the AdGuard web interface: the first-launch interface used its setup port, while the configured web service subsequently listened on container port 80. The host-to-container mapping was corrected accordingly.
+I also hit a separate AdGuard web UI issue. The setup interface and the final web interface used different container ports, so I had to correct the Docker host-to-container mapping.
 
-See [`docs/troubleshooting/dns-over-wireguard.md`](docs/troubleshooting/dns-over-wireguard.md).
+Full write-up: [`docs/troubleshooting/dns-over-wireguard.md`](docs/troubleshooting/dns-over-wireguard.md)
 
-## Network diagnostics and tuning
+## Network diagnostics
 
-The VPS was also used for practical network diagnostics:
+I also used the VPS to test a few lower-level network issues:
 
-- BBR + `fq` configured and verified
-- latency and packet-loss testing
-- multiple ICMP payload sizes
+- BBR + `fq`
+- latency and packet loss
+- different ICMP payload sizes
 - DF/MTU testing with a 1372-byte payload
-- traceroute investigation
-- IPv6 capability inspection
+- traceroute
+- IPv6 capability
 
-No clear MTU/fragmentation failure was demonstrated. VPS-side testing to a public resolver was stable during the recorded test, while the remote access network showed greater latency/jitter and intermittent ICMP loss. This is documented as a troubleshooting observation, not a permanent performance benchmark.
+I did not find a clear MTU/fragmentation failure in the recorded tests. The VPS-side path was comparatively stable, while the remote access network showed more latency/jitter and intermittent ICMP loss.
 
-See [`docs/network-diagnostics.md`](docs/network-diagnostics.md).
+More details: [`docs/network-diagnostics.md`](docs/network-diagnostics.md)
 
-## Repository structure
+## Files worth looking at
 
-```text
-.
-├── README.md
-├── diagrams/
-├── docker/
-│   └── adguard-home/
-│       └── compose.example.yml
-├── docs/
-│   ├── server-hardening.md
-│   ├── wireguard-and-routing.md
-│   ├── adguard-home.md
-│   ├── network-diagnostics.md
-│   ├── verification.md
-│   └── troubleshooting/
-│       └── dns-over-wireguard.md
-└── wireguard/
-    └── README.md
-```
+- [`docker/adguard-home/compose.example.yml`](docker/adguard-home/compose.example.yml) — sanitized Compose example based on the live deployment
+- [`docs/server-hardening.md`](docs/server-hardening.md) — SSH, UFW and service exposure
+- [`docs/troubleshooting/dns-over-wireguard.md`](docs/troubleshooting/dns-over-wireguard.md) — real DNS troubleshooting case
+- [`docs/network-diagnostics.md`](docs/network-diagnostics.md) — BBR, MTU, latency and IPv6 checks
+- [`docs/verification.md`](docs/verification.md) — what is working and what is still open
 
-## Skills demonstrated
+## Things I would improve next
 
-- Linux server administration
-- SSH hardening and public-key authentication
-- Host firewall configuration
-- WireGuard VPN deployment
-- IPv4 routing and forwarding
-- DNS infrastructure
-- Docker and Docker Compose
-- Service exposure and port-binding design
-- Network troubleshooting
-- MTU, latency, and packet-loss diagnostics
-- Operational verification
-- Security-conscious technical documentation
+This setup works, but there are still things I want to tighten up:
 
-## Scope
+- disable X11 forwarding because I do not need it on this VPS
+- review whether the current routed-firewall policy can be made more restrictive
+- pin the AdGuard container image instead of relying on `latest`
+- document the final encrypted DNS upstream once I re-check the live config
+- revisit global IPv6 only if the VPS provider actually supplies usable IPv6 connectivity
 
-This repository intentionally documents conventional defensive infrastructure: Linux administration, secure remote access, DNS, containers, routing, monitoring, and troubleshooting. It does not publish unrelated sensitive infrastructure or credentials.
-
-## Status
-
-This is an evolving lab. Documentation distinguishes verified implementation from future work; planned features are not presented as completed.
+I prefer leaving those visible instead of presenting the lab as finished or perfect.
