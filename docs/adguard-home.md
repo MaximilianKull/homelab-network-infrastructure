@@ -1,16 +1,10 @@
 # AdGuard Home
 
-## Deployment
+I run AdGuard Home in Docker Compose on the Ubuntu VPS.
 
-AdGuard Home is deployed with Docker Compose on the Ubuntu VPS.
+## How I expose it
 
-Verified runtime versions during inspection included Docker 29.1.3 and Docker Compose 2.40.3. AdGuard Home had previously been observed running version 0.107.79; the public Compose example intentionally avoids pretending that `latest` is a fixed version.
-
-Persistent data is stored under the service directory and mounted into the container for AdGuard work and configuration data.
-
-## Exposure model
-
-The important design decision is where the service is published.
+The main thing I cared about here was not making the DNS service or admin interface more public than necessary.
 
 ```text
 WireGuard clients
@@ -28,39 +22,38 @@ VPS localhost
           AdGuard web UI :80
 ```
 
-DNS is therefore reachable through the VPN-side address, while the management UI is bound locally.
+DNS is reachable from the VPN side. The web UI stays on localhost.
 
-## Sanitized Compose example
+The sanitized Compose file is here:
+[`../docker/adguard-home/compose.example.yml`](../docker/adguard-home/compose.example.yml)
 
-See [`../docker/adguard-home/compose.example.yml`](../docker/adguard-home/compose.example.yml).
+## Persistent data
 
-The example uses placeholders and does not contain credentials or public infrastructure identifiers.
+The container uses persistent mounts for its working data and configuration so rebuilding the container does not wipe the setup.
 
 ## DNS upstreams
 
-Encrypted upstream DNS was explored and configured. Cloudflare was selected after tested Yandex endpoint forms failed validation.
+I tested encrypted upstream DNS and ended up using Cloudflare after the Yandex endpoint forms I tried failed validation.
 
-The exact final production upstream string was not captured in the verified handoff, so it is intentionally not claimed or reproduced here. This prevents a suggested or failed value from being presented as a known-good production configuration.
+I have not added the exact final upstream string yet because I want to re-check the live config first instead of copying an old or failed value into the repo.
 
-## IPv6 behavior
+## IPv6
 
-The VPS did not demonstrate usable global IPv6 connectivity during inspection. IPv6-related DNS behavior was therefore reviewed with that host limitation in mind.
+The VPS did not have working global IPv6 in the checks I captured, so I treated DNS behavior with that limitation in mind instead of assuming dual-stack connectivity.
 
-## Web UI port troubleshooting
+## Port mapping issue I hit
 
-During first launch, AdGuard exposed its setup interface on its initial setup port. After configuration, the web service listened internally on port 80.
+During first setup, AdGuard used its setup interface on one internal port. After configuration, the web service listened internally on port 80.
 
-The Docker mapping therefore needed to represent the final application listener:
+That meant the Docker mapping had to become:
 
 ```text
-host 127.0.0.1:3000 -> container 80/tcp
+127.0.0.1:3000 -> container:80
 ```
 
-This was a host-versus-container port mapping issue, not a failure of the web application itself.
+The issue was the host-to-container port mapping, not the web service itself.
 
-## Operational checks
-
-Useful commands used during the deployment included:
+## Commands I used while checking it
 
 ```bash
 docker compose ps
@@ -68,4 +61,4 @@ docker logs adguardhome --tail 30
 ss -lntup | grep ':53 '
 ```
 
-Application-local DNS was also tested from inside the container before remote client testing.
+I also tested DNS from inside the container before moving outward to host and remote-client tests.
