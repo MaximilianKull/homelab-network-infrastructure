@@ -1,12 +1,10 @@
-# Server Hardening Baseline
+# Server Hardening
 
-This document records the hardening controls that were verified on the Ubuntu 24.04 VPS. It deliberately avoids publishing production credentials, hostnames, public addresses, or key material.
+This is the current hardening baseline on the Ubuntu 24.04 VPS. Real keys, credentials, hostnames and public addresses are not included here.
 
 ## SSH
 
-The effective OpenSSH server configuration was inspected with `sshd -T` rather than relying only on comments in configuration files.
-
-Verified settings:
+I checked the effective OpenSSH settings with `sshd -T` instead of only reading the config file.
 
 ```text
 port 22
@@ -16,27 +14,15 @@ passwordauthentication no
 kbdinteractiveauthentication no
 ```
 
-This means remote root login is disabled and interactive SSH authentication is based on public-key authentication rather than account passwords.
+So root login is disabled and I use SSH public-key authentication instead of passwords.
 
-### Safe key workflow
+When changing SSH authentication, I keep an existing session open and test the new key-based login in a second session before disabling password access. That avoids locking myself out if something is wrong.
 
-Private keys are never copied into this repository. The operational model is:
+No private key or `authorized_keys` file is stored in this repo.
 
-```text
-administrator device
-  private key -> remains private
-  public key  -> installed for the server account
-```
+## UFW
 
-A safe deployment workflow is to establish and test public-key access in a separate session before removing password-based access. This avoids turning an authentication hardening change into an administrative lockout.
-
-This repository does not contain an `authorized_keys` file or any real SSH key material.
-
-## Host firewall
-
-UFW was verified as active with logging enabled at the low level.
-
-Observed policy:
+Current policy:
 
 ```text
 Default incoming: deny
@@ -44,69 +30,60 @@ Default outgoing: allow
 Default routed:   allow
 ```
 
-The required inbound services were explicitly allowed:
+Inbound rules are limited to the services I currently need:
 
 ```text
 SSH       TCP
 WireGuard UDP
 ```
 
-Forwarding from the WireGuard interface toward the VPS network interface was also present for VPN client routing.
+The firewall also allows forwarding from the WireGuard interface toward the VPS network interface so VPN clients can route through the host.
 
-Exact production addresses are intentionally omitted.
+One thing I still want to review is whether the routed default policy can be tightened without breaking the VPN path.
 
 ## Service exposure
 
-The objective was not simply to make services reachable, but to make them reachable only where required.
+I tried to avoid exposing application interfaces directly to the Internet.
 
-### Public-facing entry points
-
-The host requires an SSH entry point for administration and a WireGuard UDP entry point for VPN clients.
-
-### VPN-side service
-
-AdGuard Home DNS is published on the WireGuard-side host address on port 53 TCP and UDP. It is intended for VPN clients, not as an intentionally public open resolver.
-
-### Local-only administration
-
-The AdGuard management interface is mapped to loopback on the VPS:
+- SSH is reachable for administration.
+- WireGuard is reachable for VPN clients.
+- AdGuard DNS listens on the WireGuard-side address.
+- The AdGuard web UI is mapped only to loopback:
 
 ```text
 127.0.0.1:3000 -> container:80
 ```
 
-Binding the administration interface to localhost reduces unnecessary network exposure.
+That lets me administer AdGuard locally on the VPS without making its web interface public.
 
-## Routing
+## IP forwarding
 
-IPv4 forwarding was verified:
+The VPN needs IPv4 forwarding:
 
 ```text
 net.ipv4.ip_forward = 1
 ```
 
-This is required for the VPS to route traffic for the remote-access VPN design.
-
 ## IPv6
 
-No usable global IPv6 configuration was demonstrated during verification. The host should therefore not be described as providing working global IPv6 connectivity until that is separately configured and tested.
+The VPS did not show a usable global IPv6 address or default IPv6 route during the checks I captured, so I currently treat this setup as IPv4-only.
 
-## Additional observations
+## Remaining hardening work
 
-The effective SSH configuration also reported X11 forwarding enabled. It was not required for the documented infrastructure. This repository records the verified state rather than pretending every possible hardening control was already applied.
+`sshd -T` also showed:
 
-That distinction is intentional: a security portfolio should document what was actually implemented and identify remaining review items instead of claiming an idealized configuration.
+```text
+x11forwarding yes
+```
 
-## Secrets policy
+I do not use X11 forwarding on this server, so disabling it is still on my cleanup list.
 
-Never commit:
+## What never goes into the repo
 
 - SSH private keys
 - WireGuard private or preshared keys
 - passwords
 - API/bot tokens
-- production public IP addresses
+- real public IP addresses
 - personal domains or hostnames
 - provider/account information
-
-Example configuration uses descriptive placeholders instead.
